@@ -2,6 +2,10 @@
 
 A tiny Windows app that draws a custom crosshair in the exact centre of your screen, on top of every other window. Made for Valorant, works with any game that runs in windowed or borderless mode.
 
+![Settings window](screenshots/settings.png)
+
+![All built-in crosshairs](screenshots/crosshairs.png)
+
 - 26 built-in crosshairs: crosses, dots, circles, T and X shapes, sniper scope and more
 - Change size, color, opacity, outline, line length, thickness, gap, rotation and position
 - Inner lines, outer lines, centre dot and circle can be mixed freely
