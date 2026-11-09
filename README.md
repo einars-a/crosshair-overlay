@@ -11,6 +11,8 @@ A tiny Windows app that draws a custom crosshair in the exact centre of your scr
 - Inner lines, outer lines, centre dot and circle can be mixed freely
 - Click-through: the mouse never touches the overlay
 - Hotkey (F8 by default) to show or hide it, also while in game
+- Can show the crosshair only while your game is running, or only while it is the window in front
+- Can start with Windows, hidden in the tray
 - Every change is saved instantly and restored the next time you start it
 - One small exe, nothing to install
 
@@ -27,6 +29,18 @@ Windows 10 or 11. Just run it. Windows SmartScreen may warn about an unknown pub
 3. Close the settings window. The app keeps running in the system tray (bottom right).
    Double-click the tray icon to open settings again, right-click it to exit.
 4. Press **F8** to show or hide the crosshair at any time. The key can be changed in settings.
+
+### Show it only in the game
+
+At the bottom of the settings, under **When to show**, pick one of:
+
+- **Always**: the crosshair is always on screen.
+- **While the game is running**: it appears when the game starts and disappears when the game closes.
+- **While the game is in focus**: it is only shown while the game is the window in front, so it hides when you alt-tab.
+
+The game is recognised by its process name. Valorant (`VALORANT-Win64-Shipping`) is filled in by default. For other games use **Pick running app** while the game is open, or type several names separated by commas.
+
+Tick **Start with Windows** to launch the app hidden in the tray at sign-in. Together with *While the game is running* the crosshair then shows up by itself whenever you start the game.
 
 ### Game settings
 

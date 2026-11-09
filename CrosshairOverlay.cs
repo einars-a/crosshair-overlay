@@ -3,6 +3,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
@@ -11,6 +12,7 @@ using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
+using Microsoft.Win32;
 
 namespace CrosshairOverlay
 {
@@ -52,6 +54,8 @@ namespace CrosshairOverlay
         public int Monitor = 0;            // 0 = primary, n = Screen.AllScreens[n-1]
         public int Hotkey = 3;             // index into SettingsForm.HotkeyNames (F8)
         public bool Visible = true;
+        public int ShowMode = 0;           // 0 = always, 1 = while the game is running, 2 = while the game is in focus
+        public string GameProcesses = "VALORANT-Win64-Shipping";   // comma separated process names
         public bool KeepColor = false;
         public string Preset = "Classic Cross";
 
@@ -361,6 +365,39 @@ namespace CrosshairOverlay
         [DllImport("user32.dll")] public static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
         [DllImport("user32.dll")] public static extern bool UnregisterHotKey(IntPtr hWnd, int id);
         [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+        [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+        [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+    }
+
+    // ---------------------------------------------------------------- start with Windows
+
+    // Uses the per-user "Run" registry key, the same place most tray apps use. No admin rights needed.
+    internal static class AutoStart
+    {
+        const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
+        const string ValueName = "CrosshairOverlay";
+
+        static string Command { get { return "\"" + Application.ExecutablePath + "\" --tray"; } }
+
+        // True only when the entry points at this exact exe, so a moved exe shows as "off".
+        public static bool IsOn()
+        {
+            try
+            {
+                using (RegistryKey k = Registry.CurrentUser.OpenSubKey(RunKey, false))
+                    return k != null && string.Equals(k.GetValue(ValueName) as string, Command, StringComparison.OrdinalIgnoreCase);
+            }
+            catch { return false; }
+        }
+
+        public static void Set(bool on)
+        {
+            using (RegistryKey k = Registry.CurrentUser.CreateSubKey(RunKey))
+            {
+                if (on) k.SetValue(ValueName, Command);
+                else k.DeleteValue(ValueName, false);
+            }
+        }
     }
 
     // ---------------------------------------------------------------- overlay window
@@ -391,9 +428,10 @@ namespace CrosshairOverlay
 
         protected override bool ShowWithoutActivation { get { return true; } }
 
-        public void UpdateOverlay(Config c)
+        // allowed = false hides the crosshair without touching the user's own show/hide choice.
+        public void UpdateOverlay(Config c, bool allowed)
         {
-            if (!c.Visible)
+            if (!c.Visible || !allowed)
             {
                 if (shown) { Native.ShowWindow(Handle, 0); shown = false; }
                 return;
@@ -548,13 +586,20 @@ namespace CrosshairOverlay
         PreviewPanel preview;
         ListBox presetList;
         Panel panel;
-        Label hotkeyStatus;
+        Label hotkeyStatus, gateStatus;
         ToolStripMenuItem toggleItem;
         int rowY = 6;
-        bool loading, exiting, balloonShown;
+        bool loading, exiting, balloonShown, startHidden;
 
-        public SettingsForm()
+        // "only show with the game" state
+        readonly int ownPid = Process.GetCurrentProcess().Id;
+        int tick;
+        bool gate = true, runningCache, focusCache;
+        IntPtr lastForeground = new IntPtr(-1);
+
+        public SettingsForm(bool startInTray)
         {
+            startHidden = startInTray;
             cfg = Config.Load();
             overlay = new OverlayForm();
 
@@ -590,9 +635,21 @@ namespace CrosshairOverlay
             tray.DoubleClick += delegate { ShowSettings(); };
             tray.Visible = true;
 
-            // Re-assert "on top" and re-centre regularly (covers resolution changes and other topmost windows).
-            topTimer.Interval = 1500;
-            topTimer.Tick += delegate { overlay.UpdateOverlay(cfg); };
+            // Follows the game (running / in focus) quickly, and every 1.5 s re-asserts "on top" and re-centres
+            // (covers resolution changes and other topmost windows).
+            topTimer.Interval = 250;
+            topTimer.Tick += delegate
+            {
+                tick++;
+                bool g = ComputeGate(false);
+                if (g != gate || tick % 6 == 0)
+                {
+                    bool changed = g != gate;
+                    gate = g;
+                    overlay.UpdateOverlay(cfg, gate);
+                    if (changed) UpdateGateStatus();
+                }
+            };
             topTimer.Start();
 
             LoadControls();
@@ -756,6 +813,70 @@ namespace CrosshairOverlay
             hotkeyStatus.Size = new Size(430, 20);
             panel.Controls.Add(hotkeyStatus);
             rowY += RowH;
+
+            AddHeader("When to show");
+            AddCombo("Show crosshair", "ShowMode",
+                new string[] { "Always", "While the game is running", "While the game is in focus" }, null);
+
+            Label gameLabel = new Label();
+            gameLabel.Text = "Game (process)";
+            gameLabel.Location = new Point(Indent, rowY + 5);
+            gameLabel.Size = new Size(LabelW, 20);
+            panel.Controls.Add(gameLabel);
+
+            TextBox gameBox = new TextBox();
+            gameBox.Location = new Point(Indent + LabelW + 6, rowY + 2);
+            gameBox.Size = new Size(176, 23);
+            gameBox.TextChanged += delegate
+            {
+                if (loading) return;
+                cfg.GameProcesses = gameBox.Text;
+                Changed();
+            };
+            refreshers.Add(delegate { if (gameBox.Text != cfg.GameProcesses) gameBox.Text = cfg.GameProcesses; });
+            panel.Controls.Add(gameBox);
+
+            Button pickApp = new Button();
+            pickApp.Text = "Pick running app";
+            pickApp.Location = new Point(Indent + LabelW + 6 + 182, rowY + 1);
+            pickApp.Size = new Size(116, 25);
+            pickApp.Click += delegate { ShowAppPicker(pickApp, gameBox); };
+            panel.Controls.Add(pickApp);
+            rowY += RowH;
+
+            gateStatus = new Label();
+            gateStatus.ForeColor = SystemColors.GrayText;
+            gateStatus.Location = new Point(Indent, rowY + 2);
+            gateStatus.Size = new Size(430, 20);
+            panel.Controls.Add(gateStatus);
+            rowY += RowH - 4;
+
+            AddHeader("Startup");
+            CheckBox auto = new CheckBox();
+            auto.Text = "Start with Windows (hidden in the tray)";
+            auto.AutoSize = true;
+            auto.Location = new Point(Indent + 2, rowY + 3);
+            auto.Checked = AutoStart.IsOn();
+            auto.CheckedChanged += delegate
+            {
+                try { AutoStart.Set(auto.Checked); }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(this, "Could not change the startup setting:\n" + ex.Message, "Crosshair Overlay",
+                        MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+            };
+            panel.Controls.Add(auto);
+            rowY += RowH;
+
+            Label tip = new Label();
+            tip.ForeColor = SystemColors.GrayText;
+            tip.Text = "Tip: turn this on together with \"While the game is running\" and the crosshair "
+                + "appears by itself whenever the game starts.";
+            tip.Location = new Point(Indent, rowY + 2);
+            tip.Size = new Size(430, 36);
+            panel.Controls.Add(tip);
+            rowY += 46;
 
             Label note = new Label();
             note.Text = "The game must run in \"Windowed Fullscreen\" display mode. In exclusive fullscreen "
@@ -943,9 +1064,125 @@ namespace CrosshairOverlay
             finally { loading = false; }
         }
 
+        // ---- "only show with the game" ----
+
+        List<string> GameNames()
+        {
+            List<string> names = new List<string>();
+            foreach (string raw in (cfg.GameProcesses ?? "").Split(',', ';'))
+            {
+                string n = raw.Trim();
+                if (n.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) n = n.Substring(0, n.Length - 4);
+                if (n.Length > 0) names.Add(n);
+            }
+            return names;
+        }
+
+        // Only asks Windows for the list of process names; it never opens or reads the game process.
+        bool IsGameRunning()
+        {
+            foreach (string name in GameNames())
+            {
+                Process[] found = Process.GetProcessesByName(name);
+                foreach (Process p in found) p.Dispose();
+                if (found.Length > 0) return true;
+            }
+            return false;
+        }
+
+        bool IsGameFocused()
+        {
+            IntPtr h = Native.GetForegroundWindow();
+            if (h == IntPtr.Zero || h == lastForeground) return focusCache;
+            lastForeground = h;
+            focusCache = false;
+            uint pid;
+            Native.GetWindowThreadProcessId(h, out pid);
+            if (pid == (uint)ownPid) { focusCache = true; return true; }   // keep it visible while adjusting settings
+            try
+            {
+                using (Process p = Process.GetProcessById((int)pid))
+                {
+                    string name = p.ProcessName;
+                    foreach (string n in GameNames())
+                        if (string.Equals(n, name, StringComparison.OrdinalIgnoreCase)) focusCache = true;
+                }
+            }
+            catch { }
+            return focusCache;
+        }
+
+        bool ComputeGate(bool force)
+        {
+            if (cfg.ShowMode == 2) return IsGameFocused();
+            if (cfg.ShowMode == 1)
+            {
+                if (force || tick % 8 == 0) runningCache = IsGameRunning();
+                return runningCache;
+            }
+            return true;
+        }
+
+        void UpdateGateStatus()
+        {
+            if (gateStatus == null) return;
+            if (cfg.ShowMode == 1)
+                gateStatus.Text = gate ? "Game is running: crosshair shown." : "Game is not running right now: crosshair hidden.";
+            else if (cfg.ShowMode == 2)
+                gateStatus.Text = "Shown while the game window is in front (and while this window is).";
+            else
+                gateStatus.Text = "";
+        }
+
+        void ShowAppPicker(Control anchor, TextBox box)
+        {
+            SortedDictionary<string, bool> names = new SortedDictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+            foreach (Process p in Process.GetProcesses())
+            {
+                try
+                {
+                    if (p.Id != ownPid && p.MainWindowHandle != IntPtr.Zero && p.MainWindowTitle.Length > 0)
+                        names[p.ProcessName] = true;
+                }
+                catch { }
+                finally { p.Dispose(); }
+            }
+
+            ContextMenuStrip menu = new ContextMenuStrip();
+            foreach (string n in names.Keys)
+            {
+                string name = n;
+                menu.Items.Add(name, null, delegate
+                {
+                    List<string> current = GameNames();
+                    foreach (string c in current)
+                        if (string.Equals(c, name, StringComparison.OrdinalIgnoreCase)) return;
+                    current.Add(name);
+                    box.Text = string.Join(", ", current.ToArray());
+                });
+            }
+            if (menu.Items.Count == 0) menu.Items.Add("(no open apps found)").Enabled = false;
+            menu.Show(anchor, new Point(0, anchor.Height));
+        }
+
+        // Lets the app start straight into the tray (used by "Start with Windows").
+        protected override void SetVisibleCore(bool value)
+        {
+            if (startHidden)
+            {
+                startHidden = false;
+                if (!IsHandleCreated) CreateHandle();
+                value = false;
+            }
+            base.SetVisibleCore(value);
+        }
+
         void Changed()
         {
-            overlay.UpdateOverlay(cfg);
+            lastForeground = new IntPtr(-1);
+            gate = ComputeGate(true);
+            UpdateGateStatus();
+            overlay.UpdateOverlay(cfg, gate);
             preview.Invalidate();
             cfg.Save();   // every change is written straight away, so the next start looks the same
             if (toggleItem != null) toggleItem.Text = cfg.Visible ? "Hide crosshair" : "Show crosshair";
@@ -1058,13 +1295,15 @@ namespace CrosshairOverlay
             bool created;
             using (System.Threading.Mutex mutex = new System.Threading.Mutex(true, "CrosshairOverlay_SingleInstance", out created))
             {
+                bool tray = Array.IndexOf(args, "--tray") >= 0;
                 if (!created)
                 {
+                    if (tray) return;
                     MessageBox.Show("Crosshair Overlay is already running.\nLook for its icon in the system tray (bottom right).",
                         "Crosshair Overlay", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     return;
                 }
-                Application.Run(new SettingsForm());
+                Application.Run(new SettingsForm(tray));
             }
         }
     }
