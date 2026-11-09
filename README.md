@@ -1,4 +1,4 @@
-# Crosshair Overlay
+﻿# Crosshair Overlay
 
 A tiny Windows app that draws a custom crosshair in the exact centre of your screen, on top of every other window. Made for Valorant, works with any game that runs in windowed or borderless mode.
 
@@ -12,7 +12,7 @@ A tiny Windows app that draws a custom crosshair in the exact centre of your scr
 - Click-through: the mouse never touches the overlay
 - Hotkey (F8 by default) to show or hide it, also while in game
 - Every change is saved instantly and restored the next time you start it
-- One 34 KB exe, nothing to install
+- One small exe, nothing to install
 
 ## Download
 
@@ -43,7 +43,7 @@ The app only draws a small picture on your screen. It does not read or change ga
 No tools needed, the C# compiler that ships with Windows is enough. Run `build.bat`, or:
 
 ```bat
-%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe /nologo /target:winexe /optimize+ /out:CrosshairOverlay.exe /r:System.Windows.Forms.dll /r:System.Drawing.dll CrosshairOverlay.cs
+%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe /nologo /target:winexe /optimize+ /out:CrosshairOverlay.exe /win32icon:app.ico /r:System.Windows.Forms.dll /r:System.Drawing.dll CrosshairOverlay.cs
 ```
 
 Settings are stored in `%APPDATA%\CrosshairOverlay\settings.ini`. Delete that file to reset everything.
