@@ -500,6 +500,36 @@ namespace CrosshairOverlay
         }
     }
 
+    // ---------------------------------------------------------------- wheel-safe controls
+
+    // The mouse wheel scrolls the settings list instead of silently changing the focused slider or drop-down.
+    internal static class WheelRedirect
+    {
+        public static void Scroll(Control c, MouseEventArgs e)
+        {
+            HandledMouseEventArgs h = e as HandledMouseEventArgs;
+            if (h != null) h.Handled = true;
+            ScrollableControl p = c.Parent as ScrollableControl;
+            if (p == null) return;
+            Point pos = p.AutoScrollPosition;
+            p.AutoScrollPosition = new Point(-pos.X, -pos.Y - e.Delta);
+        }
+    }
+
+    public class NoWheelTrackBar : TrackBar
+    {
+        protected override void OnMouseWheel(MouseEventArgs e) { WheelRedirect.Scroll(this, e); }
+    }
+
+    public class NoWheelComboBox : ComboBox
+    {
+        protected override void OnMouseWheel(MouseEventArgs e)
+        {
+            if (DroppedDown) { base.OnMouseWheel(e); return; }
+            WheelRedirect.Scroll(this, e);
+        }
+    }
+
     // ---------------------------------------------------------------- settings window
 
     public class SettingsForm : Form
@@ -696,6 +726,20 @@ namespace CrosshairOverlay
             AddSlider("Offset X (px)", "OffsetX", -100, 100);
             AddSlider("Offset Y (px)", "OffsetY", -100, 100);
 
+            Button center = new Button();
+            center.Text = "Reset to exact center";
+            center.Location = new Point(Indent + LabelW + 6, rowY + 1);
+            center.Size = new Size(170, 25);
+            center.Click += delegate
+            {
+                cfg.OffsetX = 0;
+                cfg.OffsetY = 0;
+                LoadControls();
+                Changed();
+            };
+            panel.Controls.Add(center);
+            rowY += RowH + 4;
+
             List<string> monitors = new List<string>();
             monitors.Add("Primary monitor");
             Screen[] screens = Screen.AllScreens;
@@ -775,7 +819,7 @@ namespace CrosshairOverlay
             l.Location = new Point(Indent, rowY + 5);
             l.Size = new Size(LabelW, 20);
 
-            TrackBar tb = new TrackBar();
+            TrackBar tb = new NoWheelTrackBar();
             tb.AutoSize = false;
             tb.TickStyle = TickStyle.None;
             tb.Minimum = min;
@@ -868,7 +912,7 @@ namespace CrosshairOverlay
             l.Size = new Size(LabelW, 20);
             panel.Controls.Add(l);
 
-            ComboBox cb = new ComboBox();
+            ComboBox cb = new NoWheelComboBox();
             cb.DropDownStyle = ComboBoxStyle.DropDownList;
             cb.Items.AddRange(items);
             cb.Location = new Point(Indent + LabelW + 6, rowY + 1);
