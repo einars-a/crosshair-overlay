@@ -27,7 +27,7 @@ Windows 10 or 11. Just run it. Windows SmartScreen may warn about an unknown pub
 1. Start `CrosshairOverlay.exe`. The crosshair appears in the middle of the screen and the settings window opens.
 2. Pick a crosshair from the list on the left and adjust it with the sliders on the right.
 3. Close the settings window. The app keeps running in the system tray (bottom right).
-   Double-click the tray icon to open settings again, right-click it to exit.
+   Double-click the tray icon, or start the exe again, to open settings. Right-click the tray icon to exit.
 4. Press **F8** to show or hide the crosshair at any time. The key can be changed in settings.
 
 ### Show it only in the game
@@ -37,6 +37,8 @@ At the bottom of the settings, under **When to show**, pick one of:
 - **Always**: the crosshair is always on screen.
 - **While the game is running**: it appears when the game starts and disappears when the game closes.
 - **While the game is in focus**: it is only shown while the game is the window in front, so it hides when you alt-tab.
+
+Tick **Hide while the mouse cursor is visible** to also hide it in the lobby and in menus. Games hide the mouse cursor while you play and show it in menus, so the crosshair is only on screen during actual gameplay. This works together with any of the three modes above.
 
 The game is recognised by its process name. Valorant (`VALORANT-Win64-Shipping`) is filled in by default. For other games use **Pick running app** while the game is open, or type several names separated by commas.
 

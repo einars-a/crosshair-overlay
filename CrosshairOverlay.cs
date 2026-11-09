@@ -56,6 +56,7 @@ namespace CrosshairOverlay
         public bool Visible = true;
         public int ShowMode = 0;           // 0 = always, 1 = while the game is running, 2 = while the game is in focus
         public string GameProcesses = "VALORANT-Win64-Shipping";   // comma separated process names
+        public bool HideWithCursor = false; // hide while the mouse cursor is visible (lobby, menus, desktop)
         public bool KeepColor = false;
         public string Preset = "Classic Cross";
 
@@ -367,6 +368,19 @@ namespace CrosshairOverlay
         [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
         [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
         [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct CURSORINFO { public int cbSize; public int flags; public IntPtr hCursor; public POINT pt; }
+        [DllImport("user32.dll")] public static extern bool GetCursorInfo(ref CURSORINFO info);
+
+        // Games hide the mouse cursor during play and show it again in menus.
+        public static bool CursorVisible()
+        {
+            CURSORINFO ci = new CURSORINFO();
+            ci.cbSize = Marshal.SizeOf(typeof(CURSORINFO));
+            if (!GetCursorInfo(ref ci)) return true;
+            return (ci.flags & 1) != 0 && ci.hCursor != IntPtr.Zero;   // CURSOR_SHOWING
+        }
     }
 
     // ---------------------------------------------------------------- start with Windows
@@ -582,6 +596,10 @@ namespace CrosshairOverlay
         readonly NotifyIcon tray;
         readonly List<Action> refreshers = new List<Action>();
         readonly System.Windows.Forms.Timer topTimer = new System.Windows.Forms.Timer();
+        readonly System.Threading.EventWaitHandle showSignal =
+            new System.Threading.EventWaitHandle(false, System.Threading.EventResetMode.AutoReset, Program.ShowSignalName);
+        readonly System.Threading.EventWaitHandle exitSignal =
+            new System.Threading.EventWaitHandle(false, System.Threading.EventResetMode.AutoReset, Program.ExitSignalName);
 
         PreviewPanel preview;
         ListBox presetList;
@@ -640,15 +658,18 @@ namespace CrosshairOverlay
             topTimer.Interval = 250;
             topTimer.Tick += delegate
             {
+                // Signals from a second launch of the exe (see Program.Main).
+                if (exitSignal.WaitOne(0)) { ExitApp(); return; }
+                if (showSignal.WaitOne(0)) ShowSettings();
+
                 tick++;
                 bool g = ComputeGate(false);
                 if (g != gate || tick % 6 == 0)
                 {
-                    bool changed = g != gate;
                     gate = g;
                     overlay.UpdateOverlay(cfg, gate);
-                    if (changed) UpdateGateStatus();
                 }
+                UpdateGateStatus();
             };
             topTimer.Start();
 
@@ -843,6 +864,8 @@ namespace CrosshairOverlay
             pickApp.Click += delegate { ShowAppPicker(pickApp, gameBox); };
             panel.Controls.Add(pickApp);
             rowY += RowH;
+
+            AddCheckRow("Hide while the mouse cursor is visible (lobby, menus)", "HideWithCursor");
 
             gateStatus = new Label();
             gateStatus.ForeColor = SystemColors.GrayText;
@@ -1112,26 +1135,39 @@ namespace CrosshairOverlay
             return focusCache;
         }
 
+        bool OwnWindowInFront()
+        {
+            uint pid;
+            Native.GetWindowThreadProcessId(Native.GetForegroundWindow(), out pid);
+            return pid == (uint)ownPid;
+        }
+
         bool ComputeGate(bool force)
         {
-            if (cfg.ShowMode == 2) return IsGameFocused();
-            if (cfg.ShowMode == 1)
+            bool ok = true;
+            if (cfg.ShowMode == 2)
+            {
+                ok = IsGameFocused();
+            }
+            else if (cfg.ShowMode == 1)
             {
                 if (force || tick % 8 == 0) runningCache = IsGameRunning();
-                return runningCache;
+                ok = runningCache;
             }
-            return true;
+            // The cursor rule is skipped while this settings window is in front, so changes stay visible.
+            if (ok && cfg.HideWithCursor && Native.CursorVisible() && !OwnWindowInFront()) ok = false;
+            return ok;
         }
 
         void UpdateGateStatus()
         {
             if (gateStatus == null) return;
+            string text = "";
             if (cfg.ShowMode == 1)
-                gateStatus.Text = gate ? "Game is running: crosshair shown." : "Game is not running right now: crosshair hidden.";
+                text = runningCache ? "Game is running." : "Game is not running right now: crosshair hidden.";
             else if (cfg.ShowMode == 2)
-                gateStatus.Text = "Shown while the game window is in front (and while this window is).";
-            else
-                gateStatus.Text = "";
+                text = "Shown while the game window is in front (and while this window is).";
+            if (gateStatus.Text != text) gateStatus.Text = text;
         }
 
         void ShowAppPicker(Control anchor, TextBox box)
@@ -1279,6 +1315,19 @@ namespace CrosshairOverlay
 
     internal static class Program
     {
+        public const string ShowSignalName = "CrosshairOverlay_ShowSettings";
+        public const string ExitSignalName = "CrosshairOverlay_Exit";
+
+        static void Signal(string name)
+        {
+            try
+            {
+                using (System.Threading.EventWaitHandle h = System.Threading.EventWaitHandle.OpenExisting(name))
+                    h.Set();
+            }
+            catch { }
+        }
+
         [STAThread]
         static void Main(string[] args)
         {
@@ -1296,13 +1345,15 @@ namespace CrosshairOverlay
             using (System.Threading.Mutex mutex = new System.Threading.Mutex(true, "CrosshairOverlay_SingleInstance", out created))
             {
                 bool tray = Array.IndexOf(args, "--tray") >= 0;
+                bool exit = Array.IndexOf(args, "--exit") >= 0;
                 if (!created)
                 {
-                    if (tray) return;
-                    MessageBox.Show("Crosshair Overlay is already running.\nLook for its icon in the system tray (bottom right).",
-                        "Crosshair Overlay", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    // Already running: "--exit" closes it cleanly, a normal launch opens its settings window.
+                    if (exit) Signal(ExitSignalName);
+                    else if (!tray) Signal(ShowSignalName);
                     return;
                 }
+                if (exit) return;
                 Application.Run(new SettingsForm(tray));
             }
         }
